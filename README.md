@@ -195,5 +195,5 @@ The SDK follows the API version (`v1`). Breaking API changes ship under
 `/v2/` with a deprecation window of at least 6 months for `/v1/`.
 
 * Status page — <https://api.legichain.com/v1/status>
-* Email — `support@legichain.com`
+* Email — `contact@legichain.com`
 * GitHub — <https://github.com/legichain/legichain-python>
