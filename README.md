@@ -1,10 +1,14 @@
 # Legichain Python SDK
 
-Official Python client for the **Legichain** AML/sanctions/crypto-risk API.
+Official Python client for the **Legichain** AML, KYC and Travel Rule API.
 
+```bash
+pip install legichain
 ```
-pip install legichain-sdk
-```
+
+[![PyPI](https://img.shields.io/pypi/v/legichain.svg)](https://pypi.org/project/legichain/)
+[![Python](https://img.shields.io/pypi/pyversions/legichain.svg)](https://pypi.org/project/legichain/)
+[![License](https://img.shields.io/pypi/l/legichain.svg)](https://github.com/legichain/legichain-python/blob/main/LICENSE)
 
 * Python 3.10+
 * Sync and async clients (`Legichain`, `AsyncLegichain`)
