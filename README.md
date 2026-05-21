@@ -1,6 +1,7 @@
 # Legichain Python SDK
 
-Official Python client for the **Legichain** AML, KYC and Travel Rule API.
+Official Python client for the **[Legichain](https://legichain.com)** AML,
+KYC and Travel Rule API.
 
 ```bash
 pip install legichain
@@ -14,6 +15,20 @@ pip install legichain
 * Sync and async clients (`Legichain`, `AsyncLegichain`)
 * Webhook HMAC verification helper
 * Typed Problem Details exceptions (RFC 7807)
+
+## Get an API key
+
+Sign up at **<https://legichain.com>** — the Free plan ships with 1 RPS
+and 300 monthly credits, no card required. Once signed in:
+
+> **panel.legichain.com → Settings → API Keys → New key**
+
+Keys look like `lc_live_<22>.sk_live_<44>` (production) or
+`lc_test_<22>.sk_test_<44>` (test mode — never spends credits, safe in CI).
+Store the secret half in your secret manager — the Argon2 hash means a
+lost key can't be recovered. See the
+[full API guide](https://legichain.com/developers) for plans, rate limits
+and reference docs.
 
 ---
 
