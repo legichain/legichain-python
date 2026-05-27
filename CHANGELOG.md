@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0 — 2026-05-27
+
+* **KYC** identity verification — full SDK surface for
+  `/v1/kyc/applications/*`. Server-side: forward base64 NFC bytes
+  produced by a mobile client; this SDK never reads chips itself.
+  * `kyc_create_application`, `kyc_status`, `kyc_upload_document`,
+    `kyc_submit_nfc` (+ `kyc_nfc_access_error` for chip-access
+    retries), `kyc_upload_selfie`, `kyc_liveness_challenge`,
+    `kyc_submit_liveness`, `kyc_submit`, `kyc_retry`, `kyc_extend_ttl`.
+  * Tenant compliance officer surface — `kyc_admin_list`,
+    `kyc_admin_detail`, `kyc_admin_approve`, `kyc_admin_reject`,
+    `kyc_admin_request_retry`.
+* **Address Verification** — `av_create`, `av_upload_proof`,
+  `av_submit`, `av_status`.
+* **Personas** — `persona_create`, `persona_list`, `persona_get`.
+* Same surface on both `Legichain` (sync) and `AsyncLegichain` (async).
+* `_headers()` + `_request()` now accept an optional `client_token`
+  which is sent as `X-KYC-Client-Token` on per-application calls.
+
+# Changelog
+
 All notable changes to the Legichain Python SDK.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
