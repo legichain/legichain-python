@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 from typing import Any, Self
+from urllib.parse import quote
 
 import httpx
 
@@ -20,18 +21,81 @@ class LegichainError(Exception):
         super().__init__(f"{status_code} {self.code}: {self.detail}")
 
 
+def _v2_key(value: str) -> str:
+    if not isinstance(value, str) or not 1 <= len(value.encode()) <= 256:
+        raise ValueError("An explicit 1–256 byte idempotency key is required")
+    return value
+
+
+def _v2_kind(value: str, allowed: tuple[str, ...]) -> str:
+    if value not in allowed:
+        raise ValueError("Unsupported V2 operation kind")
+    return value
+
+
 def _idem() -> str:
     return secrets.token_hex(16)
 
 
+#: The control plane. It serves every account's login and billing, and
+#: it knows which region owns the rest, so it is a safe place to start
+#: from when you do not know.
+DEFAULT_BASE_URL = "https://api.legichain.com"
+
+#: The API refuses a call for an account it does not serve.
+WRONG_REGION = "REG_001_WRONG_REGION"
+
+
+def _region_host(code: str) -> str:
+    """Where a region answers, when all we have is its code.
+
+    The API publishes the real host in the 421 it sends and that is
+    preferred; this covers a reply that names a region and nothing else.
+    """
+    return f"https://{code}-api.legichain.com"
+
+
 class _BaseClient:
-    def __init__(self, api_key: str, base_url: str = "https://api.legichain.com",
-                 timeout: float = 30.0) -> None:
+    def __init__(self, api_key: str, base_url: str | None = None,
+                 timeout: float = 30.0, region: str | None = None) -> None:
+        """
+        `region` is a code such as `"eu"` or `"tr"`. Passing it starts
+        the client at that region's host and saves one redirect on the
+        first call. It is optional and usually unnecessary: an account's
+        region is learned from the first call that needs it, and
+        `self.region` is filled in when that happens.
+        """
         if "." not in api_key:
             raise ValueError("api_key must be 'key_id.secret'")
         self.api_key = api_key
-        self.base_url = base_url.rstrip("/")
+        self.region = region
+        self.base_url = (
+            base_url
+            or (_region_host(region) if region else DEFAULT_BASE_URL)
+        ).rstrip("/")
         self.timeout = timeout
+
+    def _repin(self, status_code: int, problem: dict[str, Any]) -> bool:
+        """Move to the host that owns this account, if that is the reply.
+
+        Returns True when the caller should try the same request again.
+        Both 421s the API can send are produced before the request
+        reaches a handler, so nothing was written and repeating it is
+        not a duplicate — with or without an idempotency key.
+        """
+        if status_code != 421 or problem.get("code") != WRONG_REGION:
+            return False
+        target = problem.get("api_base_url") or (
+            _region_host(problem["region"]) if problem.get("region") else None
+        )
+        if not target:
+            return False
+        target = str(target).rstrip("/")
+        if target == self.base_url:
+            return False
+        self.base_url = target
+        self.region = problem.get("region") or self.region
+        return True
 
     def _headers(self, idempotency_key: str | None,
                   client_token: str | None = None) -> dict[str, str]:
@@ -60,7 +124,8 @@ class Legichain(_BaseClient):
     def _request(self, method: str, path: str, *,
                  json: Any | None = None, idem: str | None = None,
                  params: dict | None = None,
-                 client_token: str | None = None) -> Any:
+                 client_token: str | None = None,
+                 _retried: bool = False) -> Any:
         client = getattr(self, "_client", None) or httpx.Client(timeout=self.timeout)
         try:
             resp = client.request(
@@ -76,10 +141,48 @@ class Legichain(_BaseClient):
                 problem = resp.json()
             except Exception:
                 problem = {"detail": resp.text[:400]}
+            if not _retried and self._repin(resp.status_code, problem):
+                return self._request(method, path, json=json, idem=idem,
+                                     params=params, client_token=client_token,
+                                     _retried=True)
             raise LegichainError(resp.status_code, problem)
         if resp.headers.get("content-type", "").startswith("application/pdf"):
             return resp.content
         return resp.json()
+
+    # Explicit queued API. Keep the same key when retrying an uncertain POST.
+    def enqueue_screen(self, kind: str, body: dict[str, Any], *, idem: str):
+        kind = _v2_kind(kind, ('person', 'company', 'crypto', 'batch'))
+        return self._request('POST', '/v2/screen/'+kind, json=body, idem=_v2_key(idem))
+
+    def enqueue_report(self, kind: str, body: dict[str, Any], *, idem: str):
+        kind = _v2_kind(kind, ('person', 'company', 'wallet'))
+        return self._request('POST', '/v2/reports/'+kind, json=body, idem=_v2_key(idem))
+
+    def enqueue_kyc_report(self, application_id: str, body: dict[str, Any], *, idem: str):
+        return self._request('POST', '/v2/reports/kyc/'+quote(application_id, safe=''), json=body, idem=_v2_key(idem))
+
+    def enqueue_kyc_evidence(self, application_id: str, step: str, body: dict[str, Any], *, idem: str, client_token: str | None = None):
+        step = _v2_kind(step, ('documents', 'selfie', 'liveness', 'nfc'))
+        return self._request('POST', '/v2/kyc/applications/'+quote(application_id, safe='')+'/'+step,
+            json=body, idem=_v2_key(idem), client_token=client_token)
+
+    def enqueue_address_submit(self, verification_id: str, *, idem: str, notes: str | None = None):
+        return self._request('POST', '/v2/address-verifications/'+quote(verification_id, safe='')+'/submit',
+            json={'notes': notes}, idem=_v2_key(idem))
+
+    def operation(self, operation_id: str):
+        return self._request('GET', '/v2/operations/'+quote(operation_id, safe=''))
+
+    def operation_task(self, operation_id: str, task_id: str):
+        return self._request('GET', '/v2/operations/'+quote(operation_id, safe='')+'/tasks/'+quote(task_id, safe=''))
+
+    def operations(self, *, cursor: str | None = None, state: str | None = None, limit: int = 50):
+        return self._request('GET', '/v2/operations', params={k:v for k,v in
+            {'cursor':cursor, 'state':state, 'limit':limit}.items() if v is not None})
+
+    def cancel_operation(self, operation_id: str):
+        return self._request('POST', '/v2/operations/'+quote(operation_id, safe='')+'/cancel', json={})
 
     # ── Screening ─────────────────────────────────────────────────────
     def screen_person(self, *, name: str, country: str | None = None,
@@ -455,7 +558,8 @@ class AsyncLegichain(_BaseClient):
     async def _request(self, method: str, path: str, *,
                        json: Any | None = None, idem: str | None = None,
                        params: dict | None = None,
-                       client_token: str | None = None) -> Any:
+                       client_token: str | None = None,
+                       _retried: bool = False) -> Any:
         resp = await self._client.request(
             method, f"{self.base_url}{path}",
             json=json, params=params,
@@ -466,10 +570,48 @@ class AsyncLegichain(_BaseClient):
                 problem = resp.json()
             except Exception:
                 problem = {"detail": resp.text[:400]}
+            if not _retried and self._repin(resp.status_code, problem):
+                return await self._request(
+                    method, path, json=json, idem=idem, params=params,
+                    client_token=client_token, _retried=True)
             raise LegichainError(resp.status_code, problem)
         if resp.headers.get("content-type", "").startswith("application/pdf"):
             return resp.content
         return resp.json()
+
+    # Explicit queued API. Keep the same key when retrying an uncertain POST.
+    async def enqueue_screen(self, kind: str, body: dict[str, Any], *, idem: str):
+        kind = _v2_kind(kind, ('person', 'company', 'crypto', 'batch'))
+        return await self._request('POST', '/v2/screen/'+kind, json=body, idem=_v2_key(idem))
+
+    async def enqueue_report(self, kind: str, body: dict[str, Any], *, idem: str):
+        kind = _v2_kind(kind, ('person', 'company', 'wallet'))
+        return await self._request('POST', '/v2/reports/'+kind, json=body, idem=_v2_key(idem))
+
+    async def enqueue_kyc_report(self, application_id: str, body: dict[str, Any], *, idem: str):
+        return await self._request('POST', '/v2/reports/kyc/'+quote(application_id, safe=''), json=body, idem=_v2_key(idem))
+
+    async def enqueue_kyc_evidence(self, application_id: str, step: str, body: dict[str, Any], *, idem: str, client_token: str | None = None):
+        step = _v2_kind(step, ('documents', 'selfie', 'liveness', 'nfc'))
+        return await self._request('POST', '/v2/kyc/applications/'+quote(application_id, safe='')+'/'+step,
+            json=body, idem=_v2_key(idem), client_token=client_token)
+
+    async def enqueue_address_submit(self, verification_id: str, *, idem: str, notes: str | None = None):
+        return await self._request('POST', '/v2/address-verifications/'+quote(verification_id, safe='')+'/submit',
+            json={'notes': notes}, idem=_v2_key(idem))
+
+    async def operation(self, operation_id: str):
+        return await self._request('GET', '/v2/operations/'+quote(operation_id, safe=''))
+
+    async def operation_task(self, operation_id: str, task_id: str):
+        return await self._request('GET', '/v2/operations/'+quote(operation_id, safe='')+'/tasks/'+quote(task_id, safe=''))
+
+    async def operations(self, *, cursor: str | None = None, state: str | None = None, limit: int = 50):
+        return await self._request('GET', '/v2/operations', params={k:v for k,v in
+            {'cursor':cursor, 'state':state, 'limit':limit}.items() if v is not None})
+
+    async def cancel_operation(self, operation_id: str):
+        return await self._request('POST', '/v2/operations/'+quote(operation_id, safe='')+'/cancel', json={})
 
     # async clones of the sync methods omitted for brevity — same payloads.
     async def screen_crypto(self, *, address: str, chain: str | None = None,

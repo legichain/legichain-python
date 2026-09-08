@@ -54,3 +54,6 @@ packages = ["legichain"]
 
 [tool.hatch.build.targets.sdist]
 include = ["legichain", "README.md", "LICENSE", "CHANGELOG.md", "pyproject.toml"]
+
+[dependency-groups]
+dev = ["pytest==8.3.4", "pytest-asyncio==0.24.0"]

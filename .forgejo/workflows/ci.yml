@@ -1,0 +1,60 @@
+name: SDK CI
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+concurrency:
+  group: sdk-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: sdk-regression
+    runs-on: lc-sdk
+    timeout-minutes: 20
+    container:
+      image: git.serce.com.tr/legichain/ci-sdk@sha256:7bf2ec78952402909f51d0238ab04a6fd49661b80b2686dfc3702e727f33cd3c
+      options: --memory=1g --cpus=1 --pids-limit=512
+    env:
+      UV_PROJECT_ENVIRONMENT: /tmp/sdk-venv
+      UV_LINK_MODE: copy
+      GOMAXPROCS: '1'
+      GOMEMLIMIT: 512MiB
+      MAVEN_OPTS: -Xmx512m
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - name: Checkout exact requested commit without persistent credentials
+        env:
+          LC_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LC_REPOSITORY: ${{ github.repository }}
+          LC_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os, re, subprocess, base64
+          sha = os.environ['LC_SHA']
+          repo = os.environ['LC_REPOSITORY']
+          assert re.fullmatch(r'[0-9a-f]{40}', sha)
+          assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo)
+          env = {**os.environ, 'GIT_CONFIG_COUNT':'1',
+                 'GIT_CONFIG_KEY_0':'http.https://git.serce.com.tr/.extraheader',
+                 'GIT_CONFIG_VALUE_0':'Authorization: Basic '+base64.b64encode(
+                     ('x-access-token:'+os.environ['LC_TOKEN']).encode()).decode(),
+                 'GIT_TERMINAL_PROMPT':'0'}
+          subprocess.run(['git','init','.'],check=True)
+          subprocess.run(['git','remote','add','origin','https://git.serce.com.tr/'+repo+'.git'],check=True)
+          subprocess.run(['git','fetch','--depth=1','origin',sha],env=env,check=True)
+          subprocess.run(['git','checkout','--detach','FETCH_HEAD'],check=True)
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip() == sha
+          PY
+      - name: Runner isolation
+        run: |
+          test ! -S /var/run/docker.sock
+          test ! -e /etc/forgejo-runner/token
+          test ! -e /root/.ssh/authorized_keys
+      - name: SDK regression and package validation
+        run: |
+          uv sync --frozen
+          uv run --frozen --no-sync pytest tests -q
+          uv build --wheel --out-dir /tmp/sdk-dist
