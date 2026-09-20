@@ -1,3 +1,24 @@
+# Legichain python SDK v2
+
+Official SDK for the existing Legichain API. [KYC v2 integration and migration](https://github.com/legichain/legichain-python/blob/main/KYC-V2.md)
+contains the current wire contract, check flags, asynchronous evidence and
+submission behavior. Version: **2.0.0**; publication status is tracked separately.
+
+```python
+from legichain import Legichain
+
+client = Legichain(api_key="YOUR_LEGICHAIN_TOKEN")
+flow = client.kyc.start({"subject_external_id": "customer-42"}, idem="customer-42-application")
+# body is the current document/selfie/NFC/liveness JSON from your capture client.
+receipt = flow.evidence("documents", body, idem="customer-42-front-capture-1")
+flow.wait(receipt["operation_id"])
+# Add the remaining configured evidence before submitting.
+submission = flow.submit()
+```
+The same API is available with `AsyncLegichain` and `await`.
+
+---
+
 # Legichain Python SDK
 
 Official Python client for the **[Legichain](https://legichain.com)** AML,

@@ -1,3 +1,9 @@
+# 2.0.0 — 2026-09-20
+
+- Current KYC evidence contract, check flags and pending decisions.
+- Single configured API token; session helpers manage application state.
+- Evidence processing is awaited before submission; final result is webhook-driven.
+
 # Changelog
 
 ## 0.2.0 — 2026-05-27

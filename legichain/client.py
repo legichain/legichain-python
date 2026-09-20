@@ -102,7 +102,7 @@ class _BaseClient:
         h = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "User-Agent": "legichain-sdk-python/0.1.0",
+            "User-Agent": "legichain-sdk-python/2.0.0",
         }
         if idempotency_key:
             h["Idempotency-Key"] = idempotency_key
@@ -113,6 +113,11 @@ class _BaseClient:
 
 class Legichain(_BaseClient):
     """Synchronous client."""
+
+    @property
+    def kyc(self):
+        from .kyc import KycV2
+        return KycV2(self)
 
     def __enter__(self) -> Self:
         self._client = httpx.Client(timeout=self.timeout)
@@ -272,6 +277,8 @@ class Legichain(_BaseClient):
         intent: str = "onboarding",
         document_type_allowed: list[str] | None = None,
         nfc_required: bool = False,
+        liveness_required: bool = True,
+        face_match_required: bool = True,
         callback_url: str | None = None,
         claimed_full_name: str | None = None,
         claimed_personal_number: str | None = None,
@@ -291,6 +298,8 @@ class Legichain(_BaseClient):
             "intent": intent,
             "document_type_allowed": document_type_allowed or ["tr_id_card", "passport"],
             "nfc_required": nfc_required,
+            "liveness_required": liveness_required,
+            "face_match_required": face_match_required,
             "meta": meta or {},
         }
         for k, v in {
@@ -345,6 +354,9 @@ class Legichain(_BaseClient):
         dg11_b64: str | None = None, dg14_b64: str | None = None,
         dg15_b64: str | None = None,
         active_authentication_b64: str | None = None,
+        dg7_b64: str | None = None, dg12_b64: str | None = None, dg13_b64: str | None = None,
+        read_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Forward an NFC chip read produced by a mobile client.
         This SDK never reads chips directly — pass through the base64
@@ -358,6 +370,8 @@ class Legichain(_BaseClient):
             ("dg11_b64", dg11_b64), ("dg14_b64", dg14_b64),
             ("dg15_b64", dg15_b64),
             ("active_authentication_b64", active_authentication_b64),
+            ("dg7_b64", dg7_b64), ("dg12_b64", dg12_b64), ("dg13_b64", dg13_b64),
+            ("read_at_client", read_at_client), ("device_attestation", device_attestation),
         ]:
             if v is not None:
                 body[k] = v
@@ -382,11 +396,15 @@ class Legichain(_BaseClient):
     def kyc_upload_selfie(self, application_id: str, *,
         client_token: str, image_b64: str,
         mime_type: str = "image/jpeg", is_video: bool = False,
+        captured_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._request("POST",
             f"/v1/kyc/applications/{application_id}/selfie",
             json={"mime_type": mime_type, "image_b64": image_b64,
-                  "is_video": is_video},
+                  "is_video": is_video,
+                  **({"captured_at_client": captured_at_client} if captured_at_client else {}),
+                  **({"device_attestation": device_attestation} if device_attestation is not None else {})},
             client_token=client_token)
 
     def kyc_liveness_challenge(self, application_id: str, *,
@@ -398,22 +416,21 @@ class Legichain(_BaseClient):
             client_token=client_token)
 
     def kyc_submit_liveness(self, application_id: str, *,
-        client_token: str,
-        challenge_token: str,
-        actions_performed: list[str],
-        frames_b64: list[str] | None = None,
-        pad_score: float | None = None,
+        client_token: str, mode: str, frame_b64: str,
+        frame_mime_type: str = "image/jpeg", challenge_token: str | None = None,
+        completed_actions: list[dict[str, Any]] | None = None,
+        frames: list[dict[str, Any]] | None = None,
+        captured_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "challenge_token": challenge_token,
-            "actions_performed": actions_performed,
-        }
-        if frames_b64 is not None:
-            body["frames_b64"] = frames_b64
-        if pad_score is not None:
-            body["pad_score"] = pad_score
+        from .kyc_models import LivenessSubmitRequest
+        body = LivenessSubmitRequest(mode=mode, frame_b64=frame_b64,
+            frame_mime_type=frame_mime_type, challenge_token=challenge_token,
+            completed_actions=completed_actions, frames=frames,
+            captured_at_client=captured_at_client,
+            device_attestation=device_attestation or {}).model_dump(mode="json", exclude_none=True)
         return self._request("POST",
-            f"/v1/kyc/applications/{application_id}/liveness",
+            f"/v1/kyc/applications/{quote(application_id, safe='')}/liveness",
             json=body, client_token=client_token)
 
     def kyc_submit(self, application_id: str, *,
@@ -548,6 +565,11 @@ class Legichain(_BaseClient):
 class AsyncLegichain(_BaseClient):
     """Asyncio client. Use as async context manager."""
 
+    @property
+    def kyc(self):
+        from .kyc import AsyncKycV2
+        return AsyncKycV2(self)
+
     async def __aenter__(self) -> Self:
         self._client = httpx.AsyncClient(timeout=self.timeout)
         return self
@@ -639,6 +661,8 @@ class AsyncLegichain(_BaseClient):
         intent: str = "onboarding",
         document_type_allowed: list[str] | None = None,
         nfc_required: bool = False,
+        liveness_required: bool = True,
+        face_match_required: bool = True,
         callback_url: str | None = None,
         claimed_full_name: str | None = None,
         claimed_personal_number: str | None = None,
@@ -656,6 +680,8 @@ class AsyncLegichain(_BaseClient):
             "intent": intent,
             "document_type_allowed": document_type_allowed or ["tr_id_card", "passport"],
             "nfc_required": nfc_required,
+            "liveness_required": liveness_required,
+            "face_match_required": face_match_required,
             "meta": meta or {},
         }
         for k, v in {
@@ -700,6 +726,9 @@ class AsyncLegichain(_BaseClient):
         dg11_b64: str | None = None, dg14_b64: str | None = None,
         dg15_b64: str | None = None,
         active_authentication_b64: str | None = None,
+        dg7_b64: str | None = None, dg12_b64: str | None = None, dg13_b64: str | None = None,
+        read_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "protocol": protocol, "access_error": False, "sod_b64": sod_b64,
@@ -710,6 +739,8 @@ class AsyncLegichain(_BaseClient):
             ("dg11_b64", dg11_b64), ("dg14_b64", dg14_b64),
             ("dg15_b64", dg15_b64),
             ("active_authentication_b64", active_authentication_b64),
+            ("dg7_b64", dg7_b64), ("dg12_b64", dg12_b64), ("dg13_b64", dg13_b64),
+            ("read_at_client", read_at_client), ("device_attestation", device_attestation),
         ]:
             if v is not None:
                 body[k] = v
@@ -730,11 +761,15 @@ class AsyncLegichain(_BaseClient):
     async def kyc_upload_selfie(self, application_id: str, *,
         client_token: str, image_b64: str,
         mime_type: str = "image/jpeg", is_video: bool = False,
+        captured_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return await self._request("POST",
             f"/v1/kyc/applications/{application_id}/selfie",
             json={"mime_type": mime_type, "image_b64": image_b64,
-                  "is_video": is_video},
+                  "is_video": is_video,
+                  **({"captured_at_client": captured_at_client} if captured_at_client else {}),
+                  **({"device_attestation": device_attestation} if device_attestation is not None else {})},
             client_token=client_token)
 
     async def kyc_liveness_challenge(self, application_id: str, *,
@@ -746,21 +781,21 @@ class AsyncLegichain(_BaseClient):
             client_token=client_token)
 
     async def kyc_submit_liveness(self, application_id: str, *,
-        client_token: str, challenge_token: str,
-        actions_performed: list[str],
-        frames_b64: list[str] | None = None,
-        pad_score: float | None = None,
+        client_token: str, mode: str, frame_b64: str,
+        frame_mime_type: str = "image/jpeg", challenge_token: str | None = None,
+        completed_actions: list[dict[str, Any]] | None = None,
+        frames: list[dict[str, Any]] | None = None,
+        captured_at_client: str | None = None,
+        device_attestation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "challenge_token": challenge_token,
-            "actions_performed": actions_performed,
-        }
-        if frames_b64 is not None:
-            body["frames_b64"] = frames_b64
-        if pad_score is not None:
-            body["pad_score"] = pad_score
+        from .kyc_models import LivenessSubmitRequest
+        body = LivenessSubmitRequest(mode=mode, frame_b64=frame_b64,
+            frame_mime_type=frame_mime_type, challenge_token=challenge_token,
+            completed_actions=completed_actions, frames=frames,
+            captured_at_client=captured_at_client,
+            device_attestation=device_attestation or {}).model_dump(mode="json", exclude_none=True)
         return await self._request("POST",
-            f"/v1/kyc/applications/{application_id}/liveness",
+            f"/v1/kyc/applications/{quote(application_id, safe='')}/liveness",
             json=body, client_token=client_token)
 
     async def kyc_submit(self, application_id: str, *,
